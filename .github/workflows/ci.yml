@@ -1,0 +1,30 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ main ]  # 在推送到main分支时触发
+  workflow_dispatch:    # 允许手动触发工作流
+
+jobs:
+  push-to-registry:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # 需要写入包的权限
+
+    steps:
+      - name: 登录到GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: 拉取Docker镜像
+        run: docker pull docker.io/library/dynamo:latest-vllm-local-dev
+        
+      - name: 为GHCR添加标签
+        run: docker tag dynamo:latest-vllm-local-dev ghcr.io/${{ github.repository_owner }}/dynamo:latest-vllm-local-dev
+        
+      - name: 推送Docker镜像到GHCR
+        run: docker push ghcr.io/${{ github.repository_owner }}/dynamo:latest-vllm-local-dev
