@@ -1,0 +1,1 @@
+FROM dynamo:latest-vllm

@@ -1,0 +1,119 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+
+    steps:
+      - name: Check available space
+        run: |
+          echo "Available disk space:"
+          df -h
+          echo "Available memory:"
+          free -h
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          # root-reserve-mb: 32768     # 为系统保留32GB
+          # temp-reserve-mb: 1024      # 为临时文件保留1GB
+          overprovision-lvm: 'true'  # 启用LVM过度配置
+          swap-size-mb: 1024         # 设置1GB交换空间
+          remove-dotnet: 'true'      # 删除.NET运行时
+          remove-android: 'true'     # 删除Android SDK
+          remove-haskell: 'true'     # 删除Haskell编译器
+          remove-codeql: 'true'      # 删除CodeQL
+          remove-docker-images: 'true'  # 删除缓存的Docker镜像
+
+      - name: Extreme cleanup
+        run: |
+          # 删除更多不需要的文件
+          sudo rm -rf /usr/share/ri
+          sudo rm -rf /usr/share/man
+          sudo rm -rf /usr/share/doc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/graalvm
+          sudo rm -rf /usr/local/share/vcpkg
+
+          # 清理Docker
+          docker system prune -af --volumes
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update Docker storage location
+        run: |
+          set -x
+          pwd
+          sudo systemctl stop docker.socket
+          sudo systemctl stop docker
+          sudo mkdir -p /home/runner/work/dynamo/dynamo/docker-storage
+
+          sudo rm -rf /var/lib/docker
+          sudo ln -s /home/runner/work/dynamo/dynamo/docker-storage /var/lib/docker
+          sudo systemctl start docker
+          sudo systemctl start docker.socket
+
+          df -h
+          free -h
+
+      - name: Convert GitHub username to lowercase
+        id: username
+        run: echo "LOWER_USERNAME=${GITHUB_ACTOR,,}" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ env.LOWER_USERNAME }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image with cache
+        uses: docker/build-push-action@v6
+        env:
+          UV_LINK_MODE: symlink
+        with:
+          # 构建上下文路径
+          context: .
+          # Dockerfile 路径
+          file: container/Dockerfile.vllm
+          # 目标阶段
+          target: dev
+          # 平台架构
+          platforms: linux/amd64
+          # 构建参数
+          build-args: |
+            NIXL_REF=0.4.1
+            BASE_IMAGE=nvcr.io/nvidia/cuda-dl-base
+            BASE_IMAGE_TAG=25.01-cuda12.8-devel-ubuntu24.04
+            FRAMEWORK=VLLM
+            VLLM_FRAMEWORK=1
+            VERSION=v0.0.1.dev.470d02c
+            PYTHON_PACKAGE_VERSION=0.0.1.dev+470d02c
+          # 本地加载镜像（用于测试）
+          load: true
+          push: true
+          tags: ghcr.io/${{ env.LOWER_USERNAME }}/dynamo:dev
+          # cache-from: type=registry,ref=ghcr.io/${{ env.LOWER_USERNAME }}/dynamo:dev
+          # cache-to: type=registry,ref=ghcr.io/${{ env.LOWER_USERNAME }}/dynamo:dev,mode=max
+
+      - name: Always show disk/mem/root usage
+        if: always()
+        run: |
+          set -x
+          df -h
+          free -h
+          sudo du -h --max-depth=1 / 2> /dev/null || true
+          sudo du -h --max-depth=1 /var/lib/docker 2> /dev/null || true
